@@ -1,0 +1,7 @@
+{
+  "out of memory": "Check the container memory limit and the shard size. Rerun the shard alone; if it passes, split the shard or raise the limit.",
+  "network timeout": "Check the artifact server health and the runner network route. Retry once, then page the artifact service owner.",
+  "authentication failure": "Rotate or refresh the registry token in the CI credential store and rerun.",
+  "disk full": "Clear the build cache on the runner and check the cleanup job. Move the workspace to the data volume if it is on the OS drive.",
+  "test failure": "Reproduce the failing test locally on the same revision. Check recent commits touching the test or its fixtures."
+}

@@ -1,0 +1,10 @@
+2026-10-07 22:01:03 INFO  Starting job ios-framework-ci #4412
+2026-10-07 22:01:09 INFO  Checking out revision 9f3c2ab
+2026-10-07 22:03:44 INFO  Running unit tests (shard 3/8)
+2026-10-07 22:04:12 ERROR Process killed: container exceeded memory limit, exit code 137
+2026-10-07 22:04:13 WARN  Retrying shard 3/8
+2026-10-07 22:05:40 ERROR dial tcp 10.2.4.18:443: i/o timeout while fetching artifact from artifactory
+2026-10-07 22:06:02 ERROR 401 Unauthorized: token expired for registry push
+2026-10-07 22:07:15 ERROR write /var/lib/build/cache: no space left on device
+2026-10-07 22:08:01 ERROR FAILED tests/test_audio_session.py::test_route_change - AssertionError: expected 2 got 3
+2026-10-07 22:08:30 INFO  Job finished with status FAILURE
