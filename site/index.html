@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oncall-triage-agent: classify CI errors over MCP</title>
+<meta name="description" content="Walk a CI build log through the repo's MCP tools: extract error lines, search, and look up the runbook step. The zero-shot model labels come from the README run.">
+<meta property="og:title" content="oncall-triage-agent">
+<meta property="og:description" content="Walk a CI build log through the repo's MCP tools: extract error lines, search, and look up the runbook step. The zero-shot model labels come from the README run.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%238b5cf6'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E">
+<style>
+
+:root{--bg:#f8fafc;--panel:#fff;--panel2:#f1f5f9;--line:#e2e8f0;--fg:#0f172a;--mute:#475569;--brand:#6d28d9;--brand-bg:#ede9fe;--ok:#047857;--ok-bg:#d1fae5;--err:#b91c1c;--err-bg:#fee2e2;--code:#0b1220;--code-fg:#e2e8f0}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#070d1a;--panel:#0d1526;--panel2:#111c33;--line:#1e2b47;--fg:#e8eefc;--mute:#9fb0cc;--brand:#a78bfa;--brand-bg:#2a1659;--ok:#34d399;--ok-bg:#06382b;--err:#fca5a5;--err-bg:#3b1212}}
+:root[data-theme=dark]{--bg:#070d1a;--panel:#0d1526;--panel2:#111c33;--line:#1e2b47;--fg:#e8eefc;--mute:#9fb0cc;--brand:#a78bfa;--brand-bg:#2a1659;--ok:#34d399;--ok-bg:#06382b;--err:#fca5a5;--err-bg:#3b1212}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--brand)}
+code,pre,textarea,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:56px;gap:12px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--fg);text-decoration:none}
+.logo i{width:22px;height:22px;border-radius:6px;background:#8b5cf6;display:inline-block}
+nav .links{display:flex;gap:18px;align-items:center;font-size:14px}
+nav .links a{color:var(--mute);text-decoration:none}
+nav .links a:hover{color:var(--fg)}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--fg);background:var(--panel);cursor:pointer;font-size:15px}
+.btn.primary{background:#8b5cf6;border-color:#8b5cf6;color:#1a0b3d}
+.btn.primary:hover{background:#a78bfa}
+.btn:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid #8b5cf6;outline-offset:2px}
+.hero{padding:72px 0 40px;text-align:center}
+.pill{display:inline-block;font-size:13px;color:var(--brand);background:var(--brand-bg);padding:4px 12px;border-radius:99px;margin-bottom:20px;font-weight:600}
+h1{font-size:clamp(34px,6vw,58px);line-height:1.08;margin:0 0 18px;letter-spacing:-.02em}
+h1 em{font-style:normal;color:var(--brand)}
+.lede{max-width:700px;margin:0 auto 28px;color:var(--mute);font-size:18px}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.stats{display:flex;gap:28px;justify-content:center;flex-wrap:wrap;margin-top:36px;color:var(--mute);font-size:14px}
+.stats b{display:block;color:var(--fg);font-size:22px}
+section{padding:56px 0}
+h2{font-size:clamp(26px,4vw,36px);margin:0 0 8px;letter-spacing:-.01em}
+.sub{color:var(--mute);margin:0 0 28px;max-width:720px}
+.lab{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:860px){.lab{grid-template-columns:minmax(0,1fr)}nav .links .hide-s{display:none}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;min-width:0}
+.card h3{margin:0;padding:12px 16px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tools{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:600 12px system-ui;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);cursor:pointer;text-transform:none;letter-spacing:0}
+.chip[aria-pressed=true]{background:var(--brand-bg);border-color:var(--brand);color:var(--brand)}
+#log{display:block;width:100%;height:420px;border:0;padding:12px 14px;font-size:12.5px;line-height:1.55;background:var(--code);color:var(--code-fg);resize:vertical;white-space:pre;overflow:auto}
+.src{display:flex;gap:8px;align-items:center;padding:10px 14px;border-top:1px solid var(--line);font-size:13px;color:var(--mute);flex-wrap:wrap}
+.out{min-height:420px}
+.status{padding:16px;color:var(--mute);font-size:14px}
+.verdict{padding:18px 16px;border-bottom:1px solid var(--line);background:var(--err-bg)}
+.verdict.unknown{background:var(--panel2)}
+.verdict b{display:block;font-size:20px;text-transform:uppercase;letter-spacing:.04em;color:var(--err)}
+.verdict.unknown b{color:var(--mute)}
+.verdict span{font-size:14px;color:var(--mute)}
+.sec{padding:14px 16px;border-bottom:1px solid var(--line)}
+.sec:last-child{border-bottom:0}
+.sec h4{margin:0 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.bar{height:10px;border-radius:99px;background:var(--panel2);overflow:hidden;max-width:260px;display:inline-block;vertical-align:middle;margin-right:10px;width:60%}
+.bar i{display:block;height:100%;background:#8b5cf6}
+.site{padding:8px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+.site:last-child{border:0}
+.site code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12px}
+.fix{background:var(--ok-bg);color:var(--ok);padding:10px 12px;border-radius:8px;font-size:14px}
+.note{font-size:13px;color:var(--mute);margin-top:12px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media (max-width:860px){.steps{grid-template-columns:minmax(0,1fr)}}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.step .n{width:28px;height:28px;border-radius:8px;background:var(--brand-bg);color:var(--brand);display:grid;place-items:center;font-weight:700;margin-bottom:10px}
+.step h3{margin:0 0 6px;font-size:17px}
+.step p{margin:0;color:var(--mute);font-size:15px}
+.tw{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow-x:auto;max-width:100%}
+table{width:100%;min-width:560px;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);background:var(--panel2)}
+tr:last-child td{border-bottom:0}
+td:first-child{font-family:ui-monospace,monospace;font-weight:700;white-space:nowrap}
+.install pre{background:var(--code);color:var(--code-fg);padding:16px;border-radius:12px;overflow-x:auto;font-size:13.5px;margin:0 0 12px}
+.cols2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:860px){.cols2{grid-template-columns:minmax(0,1fr)}}
+.limits{background:var(--panel);border:1px solid var(--line);border-left:4px solid #f59e0b;border-radius:10px;padding:16px 20px}
+.limits ul{margin:8px 0 0;padding-left:20px;color:var(--mute)}
+footer{border-top:1px solid var(--line);padding:32px 0;color:var(--mute);font-size:14px}
+footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+#log{display:block;width:100%;height:230px;border:0;padding:12px 14px;font-size:12.5px;line-height:1.55;background:var(--code);color:var(--code-fg);resize:vertical;white-space:pre;overflow:auto}
+.row{display:grid;grid-template-columns:1fr;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:13px}
+.row:last-child{border:0}
+.row code{display:block;background:var(--panel2);padding:6px 8px;border-radius:6px;font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap}
+.row select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;max-width:100%}
+.rb{background:var(--ok-bg);color:var(--ok);padding:8px 10px;border-radius:8px;font-size:13px}
+.src{display:inline-block;font:700 11px ui-monospace,monospace;padding:2px 8px;border-radius:6px;background:var(--brand-bg);color:var(--brand);margin-right:6px}
+.src.miss{background:var(--err-bg);color:var(--err)}
+.tl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);font:600 12px ui-monospace,monospace}
+.tl span{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:4px 8px}
+.tl span.sim{border-color:#f59e0b}
+.srch{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+.srch input{flex:1;min-width:140px;background:var(--code);color:var(--code-fg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px}
+.out{max-height:560px;overflow:auto}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="#top"><i></i>oncall-triage-agent</a>
+  <div class="links"><a href="#try" class="hide-s">Try it</a><a href="#install" class="hide-s">Install</a><a class="btn" href="https://github.com/gerardrecinto/oncall-triage-agent">GitHub</a></div>
+</div></nav>
+
+<header class="hero" id="top"><div class="wrap">
+  <h1>From a failed build to the <em>runbook step</em>.</h1>
+  <p class="lede">A small on-call triage tool for CI failures. An MCP server exposes four tools, a Hugging Face zero-shot model labels each error line, and a client calls them in order to print the category and what to do next.</p>
+  <div class="cta"><a class="btn primary" href="#try">Triage the sample log</a><a class="btn" href="#install">Run it</a></div>
+  <div class="stats"><div><b>4</b>MCP tools</div><div><b>5</b>failure categories</div><div><b>5</b>sample lines, a tiny test</div></div>
+</div></header>
+
+
+<section id="try"><div class="wrap">
+  <h2>Walk a build log through the four tools</h2>
+  <p class="sub">The log search, error extraction and runbook lookup run here from the repo's own code. The zero-shot classifier needs PyTorch and a downloaded model, so it does not run on this page. Its labels below are the ones the README reports for its own run of this sample log, and you can change them to see the runbook follow.</p>
+  <div class="lab">
+    <div class="card">
+      <h3><span>build.log <span class="src">SAMPLE FROM THE REPO</span></span></h3>
+      <label class="sr" for="log">CI build log</label>
+      <textarea id="log" spellcheck="false" wrap="off"></textarea>
+      <div class="srch"><label class="sr" for="q">search_logs query</label><input id="q" placeholder="search_logs: try retry or token" value="retry"><span id="hits" class="note" style="margin:0;align-self:center"></span></div>
+    </div>
+    <div class="card"><h3><span>Triage</span></h3>
+      <div class="tl" aria-hidden="true"><span>get_error_lines</span>&rarr;<span class="sim">classify_line (not run here)</span>&rarr;<span>lookup_runbook</span></div>
+      <div class="out" id="out" aria-live="polite"><div class="status" id="boot">Loading the tools (about 10 MB the first time, cached after)...</div></div>
+    </div>
+  </div>
+  <p class="note">The README reports that on these 5 lines the model labels 4 correctly and reads the memory-limit line as an authentication failure. Five lines says nothing about general accuracy.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>How it works</h2>
+  <p class="sub">A small MCP server and a client that calls it in a fixed order.</p>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><h3>An MCP server</h3><p>Four tools over stdio: <code>get_error_lines</code>, <code>search_logs</code>, <code>classify_line</code> and <code>lookup_runbook</code>.</p></div>
+    <div class="step"><div class="n">2</div><h3>A zero-shot classifier</h3><p>A DistilBERT MNLI model on PyTorch labels each error line against five plain-language descriptions. No fine-tuning.</p></div>
+    <div class="step"><div class="n">3</div><h3>A fixed sequence</h3><p>The client starts the server, pulls the error lines, classifies each, and prints the category with its runbook step.</p></div>
+  </div>
+</div></section>
+
+<section id="install" class="install"><div class="wrap">
+  <h2>Run it</h2>
+  <p class="sub">Python 3.12. Use an arm64 Python on Apple silicon, since an x86_64 Python resolves to an old torch that transformers rejects.</p>
+  <div class="cols2">
+    <div>
+<pre>python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m triage.agent</pre>
+    </div>
+    <div>
+<pre>.venv/bin/python -m pytest -q</pre>
+      <p class="note">The first run downloads the model from Hugging Face.</p>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="limits">
+    <strong>What this does not do</strong>
+    <ul>
+      <li>No LLM API call. The orchestration is a fixed sequence of tool calls, not a model choosing tools. Swapping in Claude tool use against the same server is the stated next step and has not been built.</li>
+      <li>No fine-tuning, and accuracy is checked only on the 5-line sample log, which is synthetic.</li>
+      <li>This page does not run the model. The labels shown are from the README, not computed here.</li>
+    </ul>
+  </div>
+</div></section>
+
+
+<footer><div class="wrap">
+  <span>oncall-triage-agent. Built by <a href="https://github.com/gerardrecinto">Gerard Recinto</a>.</span>
+  <span><a href="https://github.com/gerardrecinto/oncall-triage-agent">Source</a> &middot; <a href="https://github.com/gerardrecinto/oncall-triage-agent/releases">Releases</a></span>
+</div></footer>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const CATS = ["out of memory", "network timeout", "authentication failure", "disk full", "test failure"];
+  let py = null, labels = {}, rbs = {}, timer = null;
+  const track = (n) => { try { if (window.plausible) window.plausible(n); } catch (e) {} };
+  const PY = `
+import json
+from pathlib import Path
+from triage import tools
+def run(text, q):
+    p = Path("/work/build.log"); p.parent.mkdir(exist_ok=True); p.write_text(text)
+    return json.dumps({"errors": tools.get_error_lines(str(p)), "hits": tools.search_logs(str(p), q) if q else []})
+def book(cat): return tools.lookup_runbook(cat)
+`;
+  // Labels the README reports for this sample log: 4 of 5 correct, memory line read as authentication failure.
+  function guess(line) {
+    const l = line.toLowerCase();
+    if (l.includes("memory limit")) return "authentication failure";
+    if (l.includes("timeout")) return "network timeout";
+    if (l.includes("unauthorized")) return "authentication failure";
+    if (l.includes("no space")) return "disk full";
+    if (l.includes("assertion") || l.includes("failed tests")) return "test failure";
+    return CATS[0];
+  }
+  function render(r) {
+    $("hits").textContent = r.hits.length + " matching line" + (r.hits.length === 1 ? "" : "s");
+    if (!r.errors.length) { $("out").innerHTML = '<div class="status">No lines contain " ERROR ", so there is nothing to triage.</div>'; return; }
+    $("out").innerHTML = r.errors.map((ln, i) => {
+      const lab = labels[ln] || (labels[ln] = guess(ln)), bk = py.runPython(`book(${JSON.stringify(lab)})`);
+      const miss = ln.toLowerCase().includes("memory limit") && lab === "authentication failure";
+      return `<div class="row"><code>${esc(ln)}</code><div><span class="src ${miss && lab === guess(ln) ? "miss" : ""}">${lab !== guess(ln) ? "YOUR LABEL" : (miss ? "README: MISLABELED" : "README LABEL")}</span><label class="sr" for="s${i}">Category</label><select id="s${i}" data-l="${i}">${CATS.map((c) => `<option ${c === lab ? "selected" : ""}>${c}</option>`).join("")}</select></div><div class="rb"><b>Runbook:</b> ${esc(bk)}</div></div>`;
+    }).join("");
+    $("out").querySelectorAll("select").forEach((s) => s.addEventListener("change", () => { labels[r.errors[+s.dataset.l]] = s.value; render(r); track("oc_relabel"); }));
+  }
+  function go() {
+    if (!py) return;
+    try { py.globals.set("_t", $("log").value); py.globals.set("_q", $("q").value); render(JSON.parse(py.runPython("run(_t, _q)"))); }
+    catch (e) { $("out").innerHTML = `<div class="status" style="color:var(--err)">${esc(String(e.message || e).trim().split("\n").pop())}</div>`; }
+  }
+  const later = () => { clearTimeout(timer); timer = setTimeout(go, 200); };
+  $("log").addEventListener("input", later); $("q").addEventListener("input", later);
+  fetch("data/sample_build.log").then((r) => r.text()).then((t) => { $("log").value = t.trim(); go(); }).catch(() => { $("log").value = "could not load the sample log"; });
+  (async () => {
+    try {
+      py = await loadPyodide();
+      py.FS.mkdirTree("/lib/triage"); py.FS.mkdirTree("/lib/data");
+      for (const [src, dst] of [["py/triage/__init__.py", "/lib/triage/__init__.py"], ["py/triage/tools.py", "/lib/triage/tools.py"], ["data/runbooks.json", "/lib/data/runbooks.json"]]) { const r = await fetch(src); if (!r.ok) throw new Error("could not load " + src); py.FS.writeFile(dst, await r.text()); }
+      py.runPython("import sys; sys.path.insert(0, '/lib')"); py.runPython(PY);
+      window.__OC_READY__ = true; go();
+    } catch (e) { $("boot").textContent = "The in-browser tools did not load (" + String(e.message || e).split("\n").pop() + "). The install below runs the same code."; }
+  })();
+})();
+
+</script>
+</body>
+</html>
